@@ -1,0 +1,82 @@
+{
+    "feature_standardization": {
+        "face_features": [
+            {
+                "mean": 0.6058136687055043,
+                "standard_deviation": 0.48867599396508205
+            },
+            {
+                "mean": 0.2504731279242442,
+                "standard_deviation": 0.4332862070796327
+            },
+            {
+                "mean": 0.02037233179705913,
+                "standard_deviation": 0.14127053256937364
+            },
+            {
+                "mean": 0.009198561054972208,
+                "standard_deviation": 0.09546714889553083
+            },
+            {
+                "mean": 0.027913752357687886,
+                "standard_deviation": 0.1647260182666953
+            },
+            {
+                "mean": 0.48118405388949925,
+                "standard_deviation": 1.0083055214732644
+            },
+            {
+                "mean": 0.008307967315209767,
+                "standard_deviation": 0.09076877877292451
+            }
+        ],
+        "edge_features": [
+            {
+                "mean": 0.13708297003963887,
+                "standard_deviation": 0.34393515021461535
+            },
+            {
+                "mean": 0.648332147614011,
+                "standard_deviation": 0.4774912343495077
+            },
+            {
+                "mean": 0.21270467030762913,
+                "standard_deviation": 0.4092207441950917
+            },
+            {
+                "mean": 0.6415161043374071,
+                "standard_deviation": 1.0073951803375154
+            },
+            {
+                "mean": 0.2454759905213728,
+                "standard_deviation": 0.4303693486837453
+            },
+            {
+                "mean": 0.08796610804131853,
+                "standard_deviation": 0.2832457928455646
+            },
+            {
+                "mean": 0.009346231819713587,
+                "standard_deviation": 0.09622313730175712
+            },
+            {
+                "mean": 0.08154985102729462,
+                "standard_deviation": 0.27367786352978807
+            },
+            {
+                "mean": 0.003567856130347101,
+                "standard_deviation": 0.0596249216953521
+            },
+            {
+                "mean": 0.6582667814942234,
+                "standard_deviation": 0.47429097260921216
+            }
+        ],
+        "coedge_features": [
+            {
+                "mean": 0.49996051319461293,
+                "standard_deviation": 0.5000001657578517
+            }
+        ]
+    }
+}

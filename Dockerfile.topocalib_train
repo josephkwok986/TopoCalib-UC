@@ -1,0 +1,160 @@
+# docker build -t topocalib_train:1.0 -f Dockerfile.topocalib_train .
+# docker run -it --rm --gpus all --name topocalib_train topocalib_train:1.0
+
+FROM pytorch0.9.1
+
+RUN . ~/miniconda3/bin/activate && \
+    conda create -n tabpfn_cad python=3.10
+
+
+# System libraries (common OCC runtime dependencies)
+RUN sed -i 's@//archive.ubuntu.com@//mirrors.aliyun.com@g; s@//security.ubuntu.com@//mirrors.aliyun.com@g' /etc/apt/sources.list \
+ && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3-dev build-essential libgl1 libglu1-mesa libglib2.0-0 libxext6 libxrender1 libsm6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python scientific stack + OpenCascade
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda run -n tabpfn_cad pip install --no-cache-dir \
+    numpy==1.26.4 \
+    pandas==2.2.2 \
+    scikit-learn==1.5.1
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda install -n tabpfn_cad -c conda-forge -c lambouj pythonocc-core=7.7.2
+
+
+COPY  ["./TabPFN", "/TabPFN"]
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128 && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+
+    
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    cd /TabPFN && \
+    conda run -n tabpfn_cad pip install -e ".[dev]" && \
+    conda run -n tabpfn_cad pre-commit install
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip install jupyter
+
+# Create the startup script inside the container and make it executable
+RUN echo '#!/bin/bash\n\
+\n\
+# Start Jupyter Notebook in the background and save output to the log file\n\
+nohup /root/miniconda3/envs/tabpfn_cad/bin/jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root > /jupyter.log 2>&1 &\n\
+\n\
+# Wait for Jupyter to start\n\
+sleep 3\n\
+\n\
+# Extract and display the access link with the token\n\
+echo "Jupyter Notebook has started. Access link:"\n\
+grep -o "http://127.0.0.1:8888/tree?token=[a-zA-Z0-9]*" /jupyter.log\n\
+\n\
+# Enter an interactive bash shell\n\
+exec /bin/bash' > /start_jupyter.sh && \
+    chmod +x /start_jupyter.sh
+
+RUN echo ". ~/miniconda3/bin/activate && conda activate tabpfn_cad" >> /root/.bashrc
+
+
+COPY  ["./tabpfn-extensions", "/tabpfn-extensions"]
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    cd /tabpfn-extensions && \
+    conda run -n tabpfn_cad pip install -e ".[dev]"
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip uninstall tabpfn -y && \
+    conda run -n tabpfn_cad pip uninstall tabpfn-extensions -y
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip install matplotlib
+    
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda run -n tabpfn_cad pip install --no-cache-dir \
+    cupy-cuda12x \
+    "cuml-cu12==25.8.*"
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda install -c nvidia cuda-nvrtc=12.9 -y
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda run -n tabpfn_cad pip install --no-cache-dir \
+    "nvidia-cublas-cu12>=12.0,<13" \
+    "nvidia-cuda-runtime-cu12>=12.0,<13"
+    
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda install -n tabpfn_cad -c pytorch -c conda-forge \
+        faiss-gpu=1.7.4 cudatoolkit=11.8 -y
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda run -n tabpfn_cad pip install --no-cache-dir \
+    orjson==3.10.7
+    
+# Use bash as the build shell.
+SHELL ["/bin/bash", "-lc"]
+
+# 1) Switch apt to the Aliyun mirror and install basic tools
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    apt-get update && apt-get install -y curl ca-certificates git xz-utils
+
+RUN apt-get update && apt-get install -y socat
+
+# Use bash as the default shell (optional)
+SHELL ["/bin/bash", "-lc"]
+
+# Conda environment prefix (modify if needed)
+ARG ENV_PREFIX=/root/miniconda3/envs/tabpfn_cad
+# Add env/bin to PATH for easier later use of python and other tools
+ENV PATH=${ENV_PREFIX}/bin:${PATH}
+
+RUN set -eux \
+    && PY="${ENV_PREFIX}/bin/python" \
+    # Compute library directories
+    && CUDA_RT_LIBDIR="$($PY -c "import importlib, pathlib; p=pathlib.Path(importlib.import_module('nvidia.cuda_runtime').__file__).parent; print(str(p/'lib' if (p/'lib').exists() else p/'targets'/'x86_64-linux'/'lib'))")" \
+    && NVRTC_LIBDIR="$($PY -c "import importlib, pathlib; p=pathlib.Path(importlib.import_module('nvidia.cuda_nvrtc').__file__).parent; print(str(p/'lib' if (p/'lib').exists() else p))")" \
+    && CUBLAS_LIBDIR="$($PY -c "import importlib, pathlib; p=pathlib.Path(importlib.import_module('nvidia.cublas').__file__).parent; print(str(p/'lib' if (p/'lib').exists() else p))")" \
+    && HDRDIR="$($PY -c "import pathlib, nvidia.cuda_runtime as rt; p=pathlib.Path(rt.__file__).parent; cands=[p/'include', p/'targets'/'x86_64-linux'/'include']; print(next((str(c) for c in cands if c.exists()), ''))")" \
+    # Write to ld.so.conf.d and refresh the dynamic linker cache
+    && printf '%s\n' "$CUDA_RT_LIBDIR" > /etc/ld.so.conf.d/cuda-runtime-cu12.conf \
+    && printf '%s\n' "$NVRTC_LIBDIR"   > /etc/ld.so.conf.d/cuda-nvrtc-cu12.conf \
+    && printf '%s\n' "$CUBLAS_LIBDIR"  > /etc/ld.so.conf.d/cublas-cu12.conf \
+    && ldconfig \
+    # Set a fixed CUDA_PATH (only the include symlink is needed)
+    && mkdir -p /usr/local/cuda \
+    && if [ -n "$HDRDIR" ] && [ ! -e /usr/local/cuda/include ]; then ln -s "$HDRDIR" /usr/local/cuda/include; fi
+
+# Environment variables (for CuPy and compilers)
+ENV CUDA_PATH=/usr/local/cuda
+ENV CPATH=$CUDA_PATH/include:${CPATH}
+ENV PATH=$CUDA_PATH/bin:${PATH}
+
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda run -n tabpfn_cad pip install --no-cache-dir "h5py>=3.8" 
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda run -n tabpfn_cad pip install --no-cache-dir "catboost>=1.2,<2" 
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda run -n tabpfn_cad pip install --no-cache-dir "transformers>=4.40,<5"
+RUN . ~/miniconda3/bin/activate tabpfn_cad && \
+    conda run -n tabpfn_cad pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    conda run -n tabpfn_cad pip install -v --prefer-binary --no-cache-dir "xgboost>=1.7,<3"
+
+ENV PYTHONPATH="/workspace/<USER> Doc/Code/PFNs:/workspace/<USER> Doc/Code/tabicl/src:/workspace/<USER> Doc/Code/TabPFN:/workspace/<USER> Doc/Code/tabpfn-extensions:${PYTHONPATH}"
+
+CMD ["/bin/bash"]

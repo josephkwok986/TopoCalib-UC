@@ -1,0 +1,2 @@
+2f41a9f63b0ba9669cdb0302d7c667ead747246a
+2f41a9f Add support for Compounds to the BrepNet pipeline (#19)

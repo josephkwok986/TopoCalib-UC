@@ -1,0 +1,37 @@
+name: hybridbrep
+channels:
+  - pytorch
+  - pyg
+  - conda-forge
+  - defaults
+  
+dependencies:
+  - python
+  - cudatoolkit=11.3
+  - pytorch>=1.10
+  - pyg=2.0.3
+  - numpy
+  - pandas
+  - pytorch-lightning<=1.7.2
+  - tensorboard
+  - pyarrow
+  - scipy
+  - scikit-learn
+  - tqdm
+  - matplotlib
+  - dotmap
+  - meshplot
+  - ipykernel
+  - eigen
+  - occt>=7.6
+  - pythonocc-core>=7.6
+  - cmake
+  - altair
+  - altair_saver
+  - pybind11
+  - pip
+  - pip:
+    - pyrender
+    - chamferdist
+    - git+https://github.com/degravity/automate.git@v1.0.5
+    - xxhash

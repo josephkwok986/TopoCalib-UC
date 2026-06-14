@@ -1,0 +1,2 @@
+"""Candidate-pair selection modules."""
+

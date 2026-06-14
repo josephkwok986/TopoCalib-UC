@@ -1,0 +1,183 @@
+# docker build -t hybridbrep_cad:1.1 -f Dockerfile.hybridbrep_cad1.1 .
+# docker run -it -v "/mnt/c/Users/<USER>/":/workspace --rm --gpus all --name hbc hybridbrep_cad:1.1
+
+FROM ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/opt/conda/bin:$PATH \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+SHELL ["/bin/bash", "-lc"]
+
+RUN set -eux; \
+    printf 'deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal main restricted universe multiverse\n\
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-updates main restricted universe multiverse\n\
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-backports main restricted universe multiverse\n\
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-security main restricted universe multiverse\n' \
+      > /etc/apt/sources.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      cmake \
+      curl \
+      git \
+      libegl1-mesa-dev \
+      libgl1 \
+      libgl1-mesa-dev \
+      libglib2.0-0 \
+      libglu1-mesa \
+      libosmesa6-dev \
+      libsm6 \
+      libxext6 \
+      libxrender1 \
+      tini \
+      wget; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    wget -qO /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh; \
+    bash /tmp/miniconda.sh -b -p /opt/conda; \
+    rm -f /tmp/miniconda.sh; \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true; \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
+
+RUN cat > /root/.condarc <<'EOF'
+channels:
+  - pytorch
+  - pyg
+  - conda-forge
+  - defaults
+channel_priority: flexible
+show_channel_urls: true
+default_channels:
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r
+channel_alias: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
+custom_channels:
+  pytorch: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
+  pyg: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
+  conda-forge: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
+EOF
+
+RUN printf '[global]\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple\ntimeout = 120\n' > /etc/pip.conf
+
+RUN conda install -y -n base -c conda-forge mamba && conda clean -a -y
+
+RUN mamba create -y -n hybridbrep_cad python=3.9 && conda clean -a -y
+
+ENV CONDA_DEFAULT_ENV=hybridbrep_cad
+ENV PATH=/opt/conda/envs/hybridbrep_cad/bin:$PATH
+
+# Keep this close to baselines/hybridbrep/environment.yml. The environment is
+# intentionally separate from tabpfn_cad because HybridBrep depends on older
+# PyG/Lightning conventions and a compiled CAD backend.
+RUN set -eux; \
+    mamba install -y -n hybridbrep_cad \
+      -c pytorch \
+      -c pyg \
+      -c conda-forge \
+      "pytorch=1.13.*" \
+      cudatoolkit=11.7 \
+      "pyg=2.2.*" \
+      numpy \
+      pandas \
+      scipy \
+      scikit-learn \
+      tqdm \
+      matplotlib \
+      tensorboard \
+      pyarrow \
+      eigen \
+      "occt>=7.6" \
+      "pythonocc-core>=7.6" \
+      pybind11 \
+      cmake \
+      altair \
+      pip; \
+    conda clean -a -y
+
+RUN set -eux; \
+    python -m pip install --no-cache-dir \
+      "pytorch-lightning<=1.7.2" \
+      dotmap \
+      meshplot \
+      pyrender \
+      xxhash \
+      "git+https://github.com/degravity/automate.git@v1.0.5"; \
+    python -m pip install --no-cache-dir chamferdist || true
+
+COPY baselines/hybridbrep /opt/hybridbrep
+
+WORKDIR /opt/hybridbrep
+
+# hybridbrep_cpp may need Parasolid/breploader configuration in some setups.
+# The build is kept as an explicit helper so the image can still be created and
+# inspected before proprietary or external CAD SDK paths are mounted.
+RUN cat > /usr/local/bin/build_hybridbrep_cpp <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source /opt/conda/etc/profile.d/conda.sh
+conda activate hybridbrep_cad
+cd /opt/hybridbrep
+python -m pip install -e .
+python - <<'PY'
+from hybridbrep import GeneralConvEncDec, HPart
+import hybridbrep_cpp
+print("hybridbrep_cpp import OK")
+print("GeneralConvEncDec import OK", GeneralConvEncDec)
+print("HPart import OK", HPart)
+PY
+EOF
+RUN chmod +x /usr/local/bin/build_hybridbrep_cpp
+
+RUN cat > /usr/local/bin/check_hybridbrep_cad_env <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source /opt/conda/etc/profile.d/conda.sh
+conda activate hybridbrep_cad
+python - <<'PY'
+import importlib
+mods = [
+    "torch",
+    "torch_geometric",
+    "pytorch_lightning",
+    "automate",
+    "OCC",
+    "pybind11",
+]
+for name in mods:
+    try:
+        mod = importlib.import_module(name)
+        print(name, "OK", getattr(mod, "__version__", ""))
+    except Exception as exc:
+        print(name, "FAIL", type(exc).__name__, str(exc))
+try:
+    import hybridbrep_cpp
+    from hybridbrep import GeneralConvEncDec, HPart
+    print("hybridbrep_cpp OK")
+    print("GeneralConvEncDec OK", GeneralConvEncDec)
+    print("HPart OK", HPart)
+except Exception as exc:
+    print("hybridbrep package pending build:", type(exc).__name__, str(exc))
+PY
+EOF
+RUN chmod +x /usr/local/bin/check_hybridbrep_cad_env
+
+RUN printf '#!/usr/bin/env bash\nset -e\nsource /opt/conda/etc/profile.d/conda.sh\nconda activate hybridbrep_cad\nexec "$@"\n' \
+    > /usr/local/bin/entrypoint.sh \
+ && chmod +x /usr/local/bin/entrypoint.sh
+
+RUN echo '. /opt/conda/etc/profile.d/conda.sh' >> /root/.bashrc && \
+    echo 'conda activate hybridbrep_cad' >> /root/.bashrc && \
+    echo 'export PYTHONPATH=/opt/hybridbrep:${PYTHONPATH:-}' >> /root/.bashrc
+
+ENV PYTHONPATH=/opt/hybridbrep:${PYTHONPATH}
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["/bin/bash"]

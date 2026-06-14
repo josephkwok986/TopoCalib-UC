@@ -1,0 +1,178 @@
+# docker build -t topocalib_cad_preprocess:1.0 -f Dockerfile.cad_preprocess .
+# docker run -it --rm --name topocalib_cad_preprocess topocalib_cad_preprocess:1.0
+
+FROM ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    PATH=/opt/conda/bin:$PATH \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+    
+ENV CONDA_REMOTE_CONNECT_TIMEOUT_SECS=120 \
+    CONDA_REMOTE_READ_TIMEOUT_SECS=300 \
+    CONDA_RETRY_MAX=3
+
+
+# ---- China APT mirrors + basic tools (keep the installation minimal) ----
+RUN set -eux; \
+    printf 'deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal main restricted universe multiverse\n\
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-updates main restricted universe multiverse\n\
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-backports main restricted universe multiverse\n\
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-security main restricted universe multiverse\n' \
+      > /etc/apt/sources.list; \
+    echo 'Acquire::Retries "5"; Acquire::http::Timeout "30"; Acquire::https::Timeout "30"; Acquire::ForceIPv4 "true";' \
+      > /etc/apt/apt.conf.d/99tuning; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends wget bzip2 ca-certificates tini; \
+    rm -rf /var/lib/apt/lists/*
+
+# ---- Install Miniconda (Tsinghua mirror) ----
+# Install the latest Miniconda
+RUN set -eux; \
+    wget -qO /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
+    && bash /tmp/miniconda.sh -b -p /opt/conda \
+    && rm -f /tmp/miniconda.sh
+
+ENV PATH=/opt/conda/bin:$PATH
+
+# ---- Accept the Anaconda defaults channel ToS (required before any conda install) ----
+RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main \
+ && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
+# ---- Configure China mirrors for conda/pip + the lambouj channel (for occwl) ----
+RUN set -eux; \
+  cat > /root/.condarc <<'EOF'
+channels:
+  - conda-forge
+  - defaults
+  - lambouj
+channel_priority: strict
+show_channel_urls: true
+auto_activate_base: false
+default_channels:
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r
+channel_alias: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
+custom_channels:
+  lambouj: https://conda.anaconda.org
+EOF
+RUN printf '[global]\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple\ntimeout = 120\n' > /etc/pip.conf
+
+# ---- Create the project Python 3.8 environment (do not modify base) ----
+RUN conda create -y -n py38 python=3.8 && conda clean -a -y
+
+# Use py38 by default
+ENV CONDA_DEFAULT_ENV=py38
+ENV PATH=/opt/conda/envs/py38/bin:$PATH
+
+# ---- Use mamba to speed up py38 environment installation ----
+#RUN conda install -y -n py38 -c conda-forge mamba && conda clean -a -y
+
+# ---- System libraries required by pythonocc / OpenCascade at runtime (GL + X11) ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglu1-mesa \
+    libgl1-mesa-dri \
+    libxrender1 \
+    libxext6 \
+    libsm6 \
+    libxi6 \
+    libxrandr2 \
+    libxfixes3 \
+    libxcursor1 \
+ && rm -rf /var/lib/apt/lists/*
+
+# ---- py38 environment: fixed Python version + common CAD/rendering/scientific-computing libraries ----
+# Notes:
+# - occwl 1.0.0 + pythonocc-core 7.5.1 are unstable with Python >= 3.10, so py38 is fixed to Python 3.8
+RUN conda install -y -n base -c conda-forge mamba \
+  && conda clean -a -y
+
+RUN set -eux; \
+    mamba install -y -n py38 \
+      -c lambouj \
+      -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge \
+      "occwl=1.0.0" \
+      "pythonocc-core=7.5.1"
+RUN set -eux; \
+    conda install -y -n py38 \
+      -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge \
+      numpy pandas scipy matplotlib scikit-learn tqdm \
+    && conda clean -a -y
+# ---- pip packages: align with render_step_to_png.py and avoid pulling incompatible new dependencies ----
+RUN set -eux; \
+    conda run -n py38 python -m pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+      PyOpenGL==3.1.6 \
+      trimesh==3.9.35 \
+      pyglet==1.5.27 \
+      freetype-py==2.2.0 \
+      imageio==2.31.2 \
+      pyrender==0.1.45 --no-deps
+
+# Use bash for subsequent build steps.
+SHELL ["/bin/bash", "-lc"]
+
+# Basic tools used by build and preprocessing utilities.
+RUN apt-get update && apt-get install -y curl ca-certificates git xz-utils
+
+# Optional: some scenarios require a port-forwarding tool
+RUN apt-get update && apt-get install -y socat
+
+
+# System dependencies: EGL/OSMesa + common X runtime libraries
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    libosmesa6-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libglu1-mesa \
+    libxext6 libxrender1 libxkbcommon0 libxkbcommon-x11-0 libxi6 libxinerama1 \
+    libxcursor1 libxrandr2 mesa-utils && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ======================= Entrypoint: automatically activate py38 =======================
+RUN printf '#!/usr/bin/env bash\nset -e\nsource /opt/conda/etc/profile.d/conda.sh\nconda activate py38\nexec "$@"\n' \
+    > /usr/local/bin/entrypoint.sh \
+ && chmod +x /usr/local/bin/entrypoint.sh
+
+# Interactive bash sessions also enter py38 by default
+RUN echo '. /opt/conda/etc/profile.d/conda.sh' >> /etc/bash.bashrc && \
+    echo 'conda activate py38' >> /etc/bash.bashrc && \
+    echo '. /opt/conda/etc/profile.d/conda.sh' >> /root/.bashrc && \
+    echo 'conda activate py38' >> /root/.bashrc
+
+# Install LaTeX command-line tools (TikZ + Chinese support + xelatex)
+# Use latexmk -xelatex figure.tex 
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          texlive-latex-extra \
+          texlive-pictures \
+          texlive-xetex \
+          texlive-lang-chinese \
+          latexmk \
+          make \
+          perl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    conda run -n py38 python -m pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+      tqdm==4.64.0 --no-deps
+
+RUN set -eux; \
+    conda run -n py38 python -m pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple h5py --no-deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pandoc
+
+RUN set -eux; \
+    conda run -n py38 python -m pip install --no-cache-dir \
+      -i https://pypi.tuna.tsinghua.edu.cn/simple \
+      "typing_extensions==4.12.2"; \
+    conda run -n py38 python -m pip install --no-cache-dir --no-deps \
+      "torch==1.13.1+cpu" \
+      --extra-index-url https://download.pytorch.org/whl/cpu
+
+WORKDIR /workspace/'Gjj Doc'/Code/BRepPFNs/BRepViewer
+
+# If project code such as BRepNet/Pipeline is mounted at /workspace/Gjj Doc/Code/BRepNet, this PYTHONPATH enables direct imports
+ENV PYTHONPATH="/workspace/Gjj Doc/Code/BRepNet:${PYTHONPATH:-}"
+ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/entrypoint.sh"]
+CMD ["/bin/bash"]
