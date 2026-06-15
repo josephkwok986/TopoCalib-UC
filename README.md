@@ -4,6 +4,17 @@ TopoCalib-UC is a lightweight downstream learning method for low-label CAD B-Rep
 
 The experiments cover Fusion360 Gallery Segmentation and MFCAD++. This repository only contains code, adaptation layers, and experiment entry points; raw data, preprocessed outputs, checkpoints, logs, and result files should all be stored in external directories outside the repository.
 
+## Data Download Links
+
+Raw datasets are not stored in this repository. Download the datasets from the following upstream locations and place them in an external data directory before running preprocessing.
+
+- Fusion360 Gallery Dataset: https://github.com/AutodeskAILab/Fusion360GalleryDataset
+- Fusion360 Gallery Segmentation `s2.0.1`: https://fusion-360-gallery-dataset.s3.us-west-2.amazonaws.com/segmentation/s2.0.1/s2.0.1.zip
+- MFCAD dataset page: https://pure.qub.ac.uk/en/datasets/mfcad-dataset-dataset-for-paper-hierarchical-cadnet-learning-from/
+- MFCAD dataset archive: https://pure.qub.ac.uk/files/278385243/MFCAD_dataset.zip
+
+In the local experiment environment used for this repository, the raw data directories are expected outside the repository, for example `/workspace/Gjj Local/data2/MFCAD++_dataset` and `/workspace/Gjj Local/data2/s2.0.1`.
+
 ## Environment
 
 The repository provides three Dockerfiles, respectively for CAD/B-Rep preprocessing, TopoCalib-UC downstream training, and HybridBrep/SSRL representation training.
@@ -608,7 +619,11 @@ python -m baselines.external.aagnet.adapters.train_aagnet_from_config \
 
 Each training, ablation, and comparison command above outputs independent JSON files, checkpoints, and related artifacts. Mechanism analysis and result tables are compiled from the output files of each experiment.
 
+For manual preparation of the result tables and mechanism records, this repository provides a lightweight helper script that summarizes raw per-face mechanism logs from full experiment runs.
 
-## Output Notes
-
-The PartGraph cache contains the face labels, surface type, face adjacency, edge relation type, original path records, and manifest for each part. The HybridBrep directories contain the graph data required for SSRL training. The SSRL face representation directories contain face-level tensors aligned with PartGraph `part_id`. Downstream training results are recorded as individual JSON files containing the split, budget, seed, tail of the training process, validation metrics, and test metrics. External baselines first output their own raw files and are then converted into unified JSON through the adaptation layers. The values in tables and figures come from these result files and logs.
+```bash
+python scripts/summarize_result_records.py \
+  --input-jsonl "/workspace/Gjj Local/data2/topocalib_uc_out/results/mechanism/fusion360_topocalib_uc_B5_budget8_seed0.jsonl" \
+  --input-jsonl "/workspace/Gjj Local/data2/topocalib_uc_out/results/mechanism/mfcadpp_topocalib_uc_B5_budget8_seed0.jsonl" \
+  --output-root "/workspace/Gjj Local/data2/topocalib_uc_out/result_record_summary"
+```
