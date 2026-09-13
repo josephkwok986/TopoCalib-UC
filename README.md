@@ -2,7 +2,7 @@
 
 TopoCalib-UC is a lightweight downstream learning method for low-label CAD B-Rep face-level segmentation. The method builds a token adapter and class prototypes on top of a frozen SSRL B-Rep face encoder. For the currently most confusing candidate class pair, it introduces shared-boundary local evidence and same-part prototype evidence to perform ambiguity-aware calibration on the prototype decision margin. Training and inference share the same candidate-pair calibration rule.
 
-The experiments cover Fusion360 Gallery Segmentation and MFCAD++. This repository only contains code, adaptation layers, and experiment entry points; raw data, preprocessed outputs, checkpoints, logs, and result files should all be stored in external directories outside the repository.
+The experiments cover Fusion360 Gallery Segmentation and MFCAD++. This repository only contains code, adaptation layers, and experiment entry points; raw data, preprocessed outputs, checkpoints, logs, and result files should all be stored in external directories outside the repository. The fixed-protocol analysis and benchmark commands are documented in [EXPERIMENTS.md](EXPERIMENTS.md).
 
 ## Data Download Links
 
@@ -13,7 +13,7 @@ Raw datasets are not stored in this repository. Download the datasets from the f
 - MFCAD dataset page: https://pure.qub.ac.uk/en/datasets/mfcad-dataset-dataset-for-paper-hierarchical-cadnet-learning-from/
 - MFCAD dataset archive: https://pure.qub.ac.uk/files/278385243/MFCAD_dataset.zip
 
-In the local experiment environment used for this repository, the raw data directories are expected outside the repository, for example `/workspace/Gjj Local/data2/MFCAD++_dataset` and `/workspace/Gjj Local/data2/s2.0.1`.
+Raw datasets are expected outside the repository, for example under `/data/MFCAD++_dataset` and `/data/s2.0.1`.
 
 ## Environment
 
@@ -95,7 +95,7 @@ build_hybridbrep_cpp
 
 ## Data Preparation
 
-Data inputs and outputs should not be placed inside the repository. The following paths are placeholder examples; replace them with real absolute paths before execution.
+Data inputs and outputs should not be placed inside the repository. Replace the example paths below with real absolute paths before execution.
 
 ```text
 /data/fusion360_gallery/
@@ -542,7 +542,7 @@ python -m train.train \
 
 UV-Net on Fusion360:
 
-This command converts the Fusion360 PartGraph cache into the data directory required by UV-Net.
+This command prepares the STEP links, face labels, split files, and graph output directory required by UV-Net.
 
 ```bash
 cd /workspace/TopoCalib-UC
@@ -576,7 +576,7 @@ python segmentation.py train \
 
 AAGNet on MFCAD++:
 
-This command converts the MFCAD++ PartGraph cache into the data directory required by AAGNet.
+This command prepares the STEP links, face labels, split files, and AAG output directory required by AAGNet.
 
 ```bash
 cd /workspace/TopoCalib-UC
@@ -623,7 +623,15 @@ For manual preparation of the result tables and mechanism records, this reposito
 
 ```bash
 python scripts/summarize_result_records.py \
-  --input-jsonl "/workspace/Gjj Local/data2/topocalib_uc_out/results/mechanism/fusion360_topocalib_uc_B5_budget8_seed0.jsonl" \
-  --input-jsonl "/workspace/Gjj Local/data2/topocalib_uc_out/results/mechanism/mfcadpp_topocalib_uc_B5_budget8_seed0.jsonl" \
-  --output-root "/workspace/Gjj Local/data2/topocalib_uc_out/result_record_summary"
+  --input-jsonl /results/mechanism/fusion360_topocalib_uc_B5_budget1000_seed0.jsonl \
+  --input-jsonl /results/mechanism/mfcadpp_topocalib_uc_B5_budget1000_seed0.jsonl \
+  --output-root /results/mechanism_summary
+```
+
+## Code Checks
+
+Run the repository test suite from the project root:
+
+```bash
+python -m pytest -q
 ```

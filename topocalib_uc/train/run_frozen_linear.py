@@ -22,7 +22,16 @@ from topocalib_uc.tokenization.embedding_normalization import (
     normalizer_json_info,
 )
 from topocalib_uc.train.partgraph_dataset import PartGraphCache
-from topocalib_uc.train.splitting import class_aware_subset, dataset_split, random_part_split, sample_labeled_parts
+from topocalib_uc.train.splitting import (
+    class_aware_subset,
+    dataset_split,
+    load_labeled_parts_manifest,
+    load_split_manifest,
+    random_part_split,
+    sample_labeled_parts,
+    write_labeled_parts_manifest,
+    write_split_manifest,
+)
 
 
 class FrozenLinearModel(nn.Module):
@@ -45,6 +54,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--test-ratio", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--split-seed", type=int, default=None, help="Split seed; defaults to --seed.")
+    parser.add_argument("--split-manifest", type=Path, default=None, help="Load a fixed part split JSON manifest.")
+    parser.add_argument("--write-split-manifest", type=Path, default=None, help="Write the resolved split manifest.")
+    parser.add_argument("--labeled-parts-manifest", type=Path, default=None, help="Load a fixed labeled-parts JSON manifest.")
+    parser.add_argument(
+        "--write-labeled-parts-manifest",
+        type=Path,
+        default=None,
+        help="Write the resolved labeled-part selection.",
+    )
     parser.add_argument("--min-parts-per-class", type=int, default=0)
     parser.add_argument("--labeled-part-budget", required=True)
     parser.add_argument("--ssrl-cache-dir", type=Path, default=None)
@@ -76,13 +95,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     _log(f"loaded PartGraph parts={len(cache.records)} classes={cache.classes}")
     class_index = ClassIndex(cache.classes)
     split, selected_part_ids = _make_split(cache, args)
-    labeled_parts = sample_labeled_parts(
-        cache,
-        train_part_ids=split.train,
-        budget=_resolve_budget(args.labeled_part_budget, split.train),
-        seed=args.seed,
-        required_classes=cache.classes,
-    )
+    if args.write_split_manifest is not None:
+        write_split_manifest(args.write_split_manifest, cache, split)
+    budget = _resolve_budget(args.labeled_part_budget, split.train)
+    if args.labeled_parts_manifest is not None:
+        labeled_parts = load_labeled_parts_manifest(
+            args.labeled_parts_manifest,
+            cache,
+            split,
+            expected_budget=budget,
+        )
+    else:
+        labeled_parts = sample_labeled_parts(
+            cache,
+            train_part_ids=split.train,
+            budget=budget,
+            seed=args.seed,
+            required_classes=cache.classes,
+        )
+    if args.write_labeled_parts_manifest is not None:
+        write_labeled_parts_manifest(args.write_labeled_parts_manifest, cache, split, labeled_parts)
     _log(f"split train={len(split.train)} val={len(split.val)} test={len(split.test)} labeled={len(labeled_parts)}")
 
     z_by_part, embedding_dim, embedding_normalizer = _build_frozen_embeddings(cache, split.train, args)
@@ -168,8 +200,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def _make_split(cache: PartGraphCache, args: argparse.Namespace):
     selected_part_ids: list[str] | None = None
+    if args.split_manifest is not None:
+        if args.min_parts_per_class > 0:
+            raise ValueError("--min-parts-per-class cannot be combined with --split-manifest")
+        return load_split_manifest(args.split_manifest, cache), selected_part_ids
     if args.min_parts_per_class > 0:
-        selected_part_ids = class_aware_subset(cache, min_parts_per_class=args.min_parts_per_class, seed=args.seed)
+        selected_part_ids = class_aware_subset(
+            cache,
+            min_parts_per_class=args.min_parts_per_class,
+            seed=args.split_seed,
+        )
     if args.split_source == "dataset":
         split = dataset_split(cache)
         if selected_part_ids is not None:
@@ -186,7 +226,7 @@ def _make_split(cache: PartGraphCache, args: argparse.Namespace):
             train_ratio=args.train_ratio,
             val_ratio=args.val_ratio,
             test_ratio=args.test_ratio,
-            seed=args.seed,
+            seed=args.split_seed,
             require_train_all_classes=True,
         )
     return split, selected_part_ids
@@ -287,6 +327,11 @@ def _ensure_defaults(args: argparse.Namespace) -> None:
         ("val_ratio", 0.15),
         ("test_ratio", 0.15),
         ("seed", 0),
+        ("split_seed", None),
+        ("split_manifest", None),
+        ("write_split_manifest", None),
+        ("labeled_parts_manifest", None),
+        ("write_labeled_parts_manifest", None),
         ("min_parts_per_class", 0),
         ("ssrl_cache_dir", None),
         ("embedding_dim", 256),
@@ -300,6 +345,8 @@ def _ensure_defaults(args: argparse.Namespace) -> None:
     ]:
         if not hasattr(args, name):
             setattr(args, name, default)
+    if args.split_seed is None:
+        args.split_seed = args.seed
 
 
 def _log(message: str) -> None:

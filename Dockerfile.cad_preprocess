@@ -170,9 +170,9 @@ RUN set -eux; \
       "torch==1.13.1+cpu" \
       --extra-index-url https://download.pytorch.org/whl/cpu
 
-WORKDIR /workspace/'Gjj Doc'/Code/BRepPFNs/BRepViewer
+WORKDIR /workspace/TopoCalib-UC
 
-# If project code such as BRepNet/Pipeline is mounted at /workspace/Gjj Doc/Code/BRepNet, this PYTHONPATH enables direct imports
-ENV PYTHONPATH="/workspace/Gjj Doc/Code/BRepNet:${PYTHONPATH:-}"
+# Project source can be mounted at this path for direct imports.
+ENV PYTHONPATH="/workspace/TopoCalib-UC:${PYTHONPATH:-}"
 ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/entrypoint.sh"]
 CMD ["/bin/bash"]

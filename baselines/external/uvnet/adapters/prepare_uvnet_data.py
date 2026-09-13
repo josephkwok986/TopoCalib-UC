@@ -9,7 +9,6 @@ from data_protocol.io import write_json
 from baselines.external.common.partgraph_export import (
     link_or_record_step_files,
     load_exported_parts,
-    make_uvnet_placeholder_graph,
     split_part_ids,
     write_export_manifest,
     write_labels_txt,
@@ -21,9 +20,9 @@ def prepare_uvnet_data(*, partgraph_cache_dir: str | Path, output_dir: str | Pat
     parts = load_exported_parts(partgraph_cache_dir)
     step_records = link_or_record_step_files(parts, output / "steps")
     graph_dir = output / "graph"
+    graph_dir.mkdir(parents=True, exist_ok=True)
     seg_dir = output / "breps" / "seg"
     for part in parts:
-        make_uvnet_placeholder_graph(graph_dir / f"{part.part_id}.bin", part)
         write_labels_txt(seg_dir / f"{part.part_id}.seg", part.labels)
 
     splits = split_part_ids(parts)

@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
-
-import torch
 
 from data_protocol.io import write_json
 from topocalib_uc.train.partgraph_dataset import PartGraphCache, PartRecord
@@ -113,31 +111,32 @@ def link_or_record_step_files(parts: list[ExportedPart], step_dir: Path) -> list
     for part in parts:
         target = step_dir / f"{part.part_id}.step"
         source = part.step_path
-        if source and Path(source).exists() and not target.exists():
+        if source is None:
+            raise FileNotFoundError(f"Part {part.part_id!r} has no STEP source path")
+        source_path = Path(source)
+        if not source_path.is_file():
+            raise FileNotFoundError(f"STEP source for part {part.part_id!r} does not exist: {source_path}")
+        source_path = source_path.resolve()
+
+        if target.exists() or target.is_symlink():
+            if target.is_dir() and not target.is_symlink():
+                raise IsADirectoryError(f"STEP target is a directory: {target}")
             try:
-                os.symlink(source, target)
-            except FileExistsError:
-                pass
+                if target.samefile(source_path):
+                    records.append(
+                        {"part_id": part.part_id, "source": str(source_path), "local_step": str(target)}
+                    )
+                    continue
             except OSError:
-                target.write_text(f"STEP_SOURCE={source}\n", encoding="utf-8")
-        elif not target.exists():
-            target.write_text(f"STEP_SOURCE={source or ''}\n", encoding="utf-8")
-        records.append({"part_id": part.part_id, "source": source, "local_step": str(target)})
+                pass
+            target.unlink()
+
+        try:
+            os.symlink(source_path, target)
+        except OSError:
+            shutil.copy2(source_path, target)
+        records.append({"part_id": part.part_id, "source": str(source_path), "local_step": str(target)})
     return records
-
-
-def make_uvnet_placeholder_graph(path: Path, part: ExportedPart) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    num_edges = max(1, len(part.edges))
-    payload = {
-        "format": "uvnet_dgl_placeholder",
-        "part_id": part.part_id,
-        "num_nodes": part.num_faces,
-        "edges": part.edges or [[0, 0]],
-        "node_feature_shape": [part.num_faces, 10, 10, 7],
-        "edge_feature_shape": [num_edges, 10, 6],
-    }
-    torch.save(payload, path)
 
 
 def _optional_str(value: Any) -> str | None:

@@ -18,7 +18,7 @@ from statistics import mean
 from typing import Any, Iterable
 
 
-DEFAULT_OUTPUT_ROOT = Path("/workspace/Gjj Local/data2/topocalib_uc_out/result_record_summary")
+DEFAULT_OUTPUT_ROOT = Path("result_record_summary")
 MARGIN_BINS = [
     ("very_small", 0.00, 0.05),
     ("small", 0.05, 0.10),

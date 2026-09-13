@@ -9,18 +9,18 @@ The filter is applied at part level:
 Full Fusion360 command:
   python scripts/compute_ssrl_filtered_subset_stats.py \
     --dataset_name fusion360 \
-    --dataset_root "/workspace/Gjj Local/data2/s2.0.1" \
-    --step_dir "/workspace/Gjj Local/data2/s2.0.1/breps/step" \
-    --label_dir "/workspace/Gjj Local/data2/s2.0.1/breps/seg" \
-    --output_dir "/workspace/Gjj Local/data2/ssrl_filtered_stats/fusion360"
+    --dataset_root "/data/s2.0.1" \
+    --step_dir "/data/s2.0.1/breps/step" \
+    --label_dir "/data/s2.0.1/breps/seg" \
+    --output_dir "/results/ssrl_filtered_stats/fusion360"
 
 Full MFCAD++ command:
   python scripts/compute_ssrl_filtered_subset_stats.py \
     --dataset_name mfcadpp \
-    --dataset_root "/workspace/Gjj Local/data2/MFCAD++_dataset" \
-    --step_dir "/workspace/Gjj Local/data2/MFCAD++_dataset/step" \
-    --label_dir "/workspace/Gjj Local/data2/MFCAD++_dataset/hierarchical_graphs" \
-    --output_dir "/workspace/Gjj Local/data2/ssrl_filtered_stats/mfcadpp"
+    --dataset_root "/data/MFCAD++_dataset" \
+    --step_dir "/data/MFCAD++_dataset/step" \
+    --label_dir "/data/MFCAD++_dataset/hierarchical_graphs" \
+    --output_dir "/results/ssrl_filtered_stats/mfcadpp"
 
 """
 
@@ -110,7 +110,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--progress_interval",
         type=int,
-        required=True,
+        default=1000,
         help="Print progress every N processed parts.",
     )
     return parser
@@ -271,6 +271,82 @@ def safe_ratio(numerator: int, denominator: int) -> float:
     return float(numerator) / float(denominator) if denominator else 0.0
 
 
+def build_table_a2_statistics(
+    summary: Dict[str, object],
+    before_counts: Counter[int],
+    after_counts: Counter[int],
+    class_names: Dict[int, str],
+) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
+    """Add class shares, retention extrema, and Table A2 summary fields."""
+
+    total_before = int(summary["original_num_faces"])
+    total_after = int(summary["filtered_num_faces"])
+    rows: List[Dict[str, object]] = []
+    for class_id in sorted(set(before_counts) | set(after_counts)):
+        before = int(before_counts[class_id])
+        after = int(after_counts[class_id])
+        before_share = safe_ratio(before, total_before)
+        after_share = safe_ratio(after, total_after)
+        rows.append(
+            {
+                "class_id": class_id,
+                "class_name": class_names.get(class_id, f"class_{class_id}"),
+                "before_face_count": before,
+                "after_face_count": after,
+                "before_share": before_share,
+                "after_share": after_share,
+                "share_change_pp": 100.0 * (after_share - before_share),
+                "retention_ratio": safe_ratio(after, before),
+            }
+        )
+
+    retained_classes = [row for row in rows if int(row["before_face_count"]) > 0]
+    if retained_classes:
+        retention_min = min(retained_classes, key=lambda row: (float(row["retention_ratio"]), int(row["class_id"])))
+        retention_max = max(retained_classes, key=lambda row: (float(row["retention_ratio"]), -int(row["class_id"])))
+        largest_change = max(
+            retained_classes,
+            key=lambda row: (abs(float(row["share_change_pp"])), -int(row["class_id"])),
+        )
+        extrema: Dict[str, object] = {
+            "class_retention_min": float(retention_min["retention_ratio"]),
+            "class_retention_min_class_id": int(retention_min["class_id"]),
+            "class_retention_min_class_name": str(retention_min["class_name"]),
+            "class_retention_max": float(retention_max["retention_ratio"]),
+            "class_retention_max_class_id": int(retention_max["class_id"]),
+            "class_retention_max_class_name": str(retention_max["class_name"]),
+            "largest_absolute_class_share_change_pp": abs(float(largest_change["share_change_pp"])),
+            "largest_class_share_change_pp": float(largest_change["share_change_pp"]),
+            "largest_class_share_change_class_id": int(largest_change["class_id"]),
+            "largest_class_share_change_class_name": str(largest_change["class_name"]),
+        }
+    else:
+        extrema = {
+            "class_retention_min": 0.0,
+            "class_retention_min_class_id": None,
+            "class_retention_min_class_name": None,
+            "class_retention_max": 0.0,
+            "class_retention_max_class_id": None,
+            "class_retention_max_class_name": None,
+            "largest_absolute_class_share_change_pp": 0.0,
+            "largest_class_share_change_pp": 0.0,
+            "largest_class_share_change_class_id": None,
+            "largest_class_share_change_class_name": None,
+        }
+
+    enriched = dict(summary)
+    enriched["table_a2"] = {
+        "pre_filter_parts": int(summary["original_num_parts"]),
+        "retained_parts": int(summary["filtered_num_parts"]),
+        "part_retention": float(summary["part_retention"]),
+        "pre_filter_faces": total_before,
+        "retained_faces": total_after,
+        "face_retention": float(summary["face_retention"]),
+        **extrema,
+    }
+    return enriched, rows
+
+
 def format_duration(seconds: Optional[float]) -> str:
     if seconds is None:
         return "unknown"
@@ -379,7 +455,9 @@ def compute_stats(
     }
 
     validate_stats(summary, before_counts, after_counts)
-    write_outputs(output_dir, summary, before_counts, after_counts, load_class_names(dataset_name, dataset_root))
+    class_names = load_class_names(dataset_name, dataset_root)
+    enriched_summary, class_rows = build_table_a2_statistics(summary, before_counts, after_counts, class_names)
+    write_outputs(output_dir, enriched_summary, class_rows)
     print(progress_line(dataset_name, processed_step_paths, total_step_paths, filtered_num_parts, start_time), flush=True)
     print(
         f"[{dataset_name}] done original_parts={original_num_parts} "
@@ -403,17 +481,15 @@ def validate_stats(summary: Dict[str, object], before: Counter[int], after: Coun
 def write_outputs(
     output_dir: Path,
     summary: Dict[str, object],
-    before_counts: Counter[int],
-    after_counts: Counter[int],
-    class_names: Dict[int, str],
+    class_rows: List[Dict[str, object]],
 ) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = output_dir / "retention_summary.json"
     with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
         f.write("\n")
 
     csv_path = output_dir / "class_distribution_before_after.csv"
-    all_class_ids = sorted(set(before_counts) | set(after_counts))
     with csv_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(
             f,
@@ -422,22 +498,22 @@ def write_outputs(
                 "class_name",
                 "before_face_count",
                 "after_face_count",
+                "before_share",
+                "after_share",
+                "share_change_pp",
                 "retention_ratio",
             ],
         )
         writer.writeheader()
-        for class_id in all_class_ids:
-            before = before_counts[class_id]
-            after = after_counts[class_id]
-            writer.writerow(
-                {
-                    "class_id": class_id,
-                    "class_name": class_names.get(class_id, f"class_{class_id}"),
-                    "before_face_count": before,
-                    "after_face_count": after,
-                    "retention_ratio": safe_ratio(after, before),
-                }
-            )
+        writer.writerows(class_rows)
+
+    table_path = output_dir / "table_a2_summary.csv"
+    table = dict(summary["table_a2"])
+    table["dataset_name"] = summary["dataset_name"]
+    with table_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(table.keys()))
+        writer.writeheader()
+        writer.writerow(table)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 import random
+from typing import Any
 
 from .partgraph_dataset import PartGraphCache
 
@@ -16,6 +19,87 @@ class PartSplit:
 
     def as_dict(self) -> dict[str, list[str]]:
         return {"train": self.train, "val": self.val, "test": self.test}
+
+
+MANIFEST_SCHEMA_VERSION = 1
+
+
+def load_split_manifest(path: str | Path, cache: PartGraphCache) -> PartSplit:
+    """Load and validate a fixed part-level split manifest."""
+
+    raw = _read_manifest(path, expected_kind="part_split")
+    _validate_manifest_identity(raw, cache, path)
+    split = PartSplit(
+        train=[str(item) for item in raw.get("train", [])],
+        val=[str(item) for item in raw.get("val", [])],
+        test=[str(item) for item in raw.get("test", [])],
+    )
+    _validate_split(cache, split, source=str(path))
+    return split
+
+
+def write_split_manifest(path: str | Path, cache: PartGraphCache, split: PartSplit) -> None:
+    """Write a fixed split manifest using dataset-relative part identifiers."""
+
+    _validate_split(cache, split, source="generated split")
+    payload: dict[str, Any] = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "kind": "part_split",
+        "dataset": _cache_dataset(cache),
+        "classes": list(cache.classes),
+        **split.as_dict(),
+    }
+    _write_manifest(path, payload)
+
+
+def load_labeled_parts_manifest(
+    path: str | Path,
+    cache: PartGraphCache,
+    split: PartSplit,
+    *,
+    expected_budget: int | None = None,
+) -> list[str]:
+    """Load and validate a labeled-part selection for a fixed training split."""
+
+    raw = _read_manifest(path, expected_kind="labeled_parts")
+    _validate_manifest_identity(raw, cache, path)
+    manifest_train = [str(item) for item in raw.get("train", [])]
+    if manifest_train != split.train:
+        raise ValueError(f"{path}: training part IDs do not match the active split")
+    labeled_parts = [str(item) for item in raw.get("labeled_parts", [])]
+    _validate_labeled_parts(cache, split, labeled_parts, source=str(path))
+    declared_budget = int(raw.get("budget", len(labeled_parts)))
+    if declared_budget != len(labeled_parts):
+        raise ValueError(
+            f"{path}: declared budget={declared_budget} but contains {len(labeled_parts)} labeled parts"
+        )
+    if expected_budget is not None and declared_budget != expected_budget:
+        raise ValueError(
+            f"{path}: budget={declared_budget} does not match requested budget={expected_budget}"
+        )
+    return labeled_parts
+
+
+def write_labeled_parts_manifest(
+    path: str | Path,
+    cache: PartGraphCache,
+    split: PartSplit,
+    labeled_parts: list[str],
+) -> None:
+    """Write a labeled-part selection tied to an exact training split."""
+
+    _validate_split(cache, split, source="active split")
+    _validate_labeled_parts(cache, split, labeled_parts, source="generated labeled-part selection")
+    payload = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "kind": "labeled_parts",
+        "dataset": _cache_dataset(cache),
+        "classes": list(cache.classes),
+        "budget": len(labeled_parts),
+        "train": list(split.train),
+        "labeled_parts": list(labeled_parts),
+    }
+    _write_manifest(path, payload)
 
 
 def class_aware_subset(
@@ -174,3 +258,77 @@ def _validate_ratios(train_ratio: float, val_ratio: float, test_ratio: float) ->
     if not 0.999 <= total <= 1.001:
         raise ValueError(f"split ratios must sum to 1, got {total}")
 
+
+def _read_manifest(path: str | Path, *, expected_kind: str) -> dict[str, Any]:
+    path = Path(path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot read manifest {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: manifest root must be a JSON object")
+    if int(raw.get("schema_version", -1)) != MANIFEST_SCHEMA_VERSION:
+        raise ValueError(f"{path}: unsupported manifest schema_version={raw.get('schema_version')!r}")
+    if raw.get("kind") != expected_kind:
+        raise ValueError(f"{path}: expected kind={expected_kind!r}, got {raw.get('kind')!r}")
+    return raw
+
+
+def _write_manifest(path: str | Path, payload: dict[str, Any]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _cache_dataset(cache: PartGraphCache) -> str:
+    datasets = {record.dataset for record in cache.records}
+    if len(datasets) != 1:
+        raise ValueError(f"PartGraph cache must contain one dataset, got {sorted(datasets)}")
+    return datasets.pop()
+
+
+def _validate_manifest_identity(raw: dict[str, Any], cache: PartGraphCache, path: str | Path) -> None:
+    dataset = _cache_dataset(cache)
+    if str(raw.get("dataset", "")) != dataset:
+        raise ValueError(f"{path}: dataset={raw.get('dataset')!r} does not match cache dataset={dataset!r}")
+    classes = [int(item) for item in raw.get("classes", [])]
+    if classes != cache.classes:
+        raise ValueError(f"{path}: classes={classes} do not match cache classes={cache.classes}")
+
+
+def _validate_split(cache: PartGraphCache, split: PartSplit, *, source: str) -> None:
+    groups = {"train": split.train, "val": split.val, "test": split.test}
+    for name, ids in groups.items():
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"{source}: {name} contains duplicate part IDs")
+    overlaps = (set(split.train) & set(split.val)) | (set(split.train) & set(split.test)) | (
+        set(split.val) & set(split.test)
+    )
+    if overlaps:
+        raise ValueError(f"{source}: split groups overlap at part IDs {sorted(overlaps)[:10]}")
+    all_ids = set(split.train) | set(split.val) | set(split.test)
+    unknown = all_ids - set(cache.part_ids)
+    if unknown:
+        raise ValueError(f"{source}: contains unknown part IDs {sorted(unknown)[:10]}")
+    if not split.train or not split.test:
+        raise ValueError(f"{source}: train and test groups must both be non-empty")
+
+
+def _validate_labeled_parts(
+    cache: PartGraphCache,
+    split: PartSplit,
+    labeled_parts: list[str],
+    *,
+    source: str,
+) -> None:
+    if not labeled_parts:
+        raise ValueError(f"{source}: labeled_parts must not be empty")
+    if len(labeled_parts) != len(set(labeled_parts)):
+        raise ValueError(f"{source}: labeled_parts contains duplicate part IDs")
+    outside = set(labeled_parts) - set(split.train)
+    if outside:
+        raise ValueError(f"{source}: labeled parts outside the training split: {sorted(outside)[:10]}")
+    covered = cache.labels_for_parts(set(labeled_parts))
+    missing = set(cache.classes) - covered
+    if missing:
+        raise ValueError(f"{source}: labeled parts do not cover classes {sorted(missing)}")

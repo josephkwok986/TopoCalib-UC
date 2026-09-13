@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "table": "B6",
+  "distance": "cosine",
+  "selection": {
+    "labeled_part_budget": 1000,
+    "split": "validation",
+    "seeds": [0, 1, 2],
+    "criterion": "highest mean validation mIoU"
+  },
+  "search_grid": {
+    "eps": [0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.175, 0.2],
+    "min_pts": [3, 5, 10]
+  },
+  "fixed_approximation_parameters": {
+    "n_proj": 1024,
+    "top_k": 10,
+    "top_m": 10
+  },
+  "selected": {
+    "fusion360": {
+      "eps": 0.15,
+      "min_pts": 5
+    },
+    "mfcadpp": {
+      "eps": 0.1,
+      "min_pts": 5
+    }
+  },
+  "execution": {
+    "n_threads": 1,
+    "random_seed": "run seed"
+  }
+}

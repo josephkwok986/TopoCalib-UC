@@ -20,7 +20,6 @@ from utils.misc import seed_torch, init_logger, print_num_params
 
 if __name__ == '__main__':
     torch.set_float32_matmul_precision("high") # may be faster if GPU support TF32
-    os.environ["WANDB_API_KEY"] = '##################'
     os.environ["WANDB_MODE"] = "offline"
     
     # start a new wandb run to track this script

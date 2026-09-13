@@ -1,0 +1,14 @@
+.git
+.idea
+__pycache__
+*.pyc
+*.pyo
+*.so
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+local_work
+baselines/external/sDbscan/build
+baselines/external/sDbscan/cmake-build-debug
+baselines/external/sDbscan/cmake-build-release
