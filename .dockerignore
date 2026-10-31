@@ -12,3 +12,5 @@ local_work
 baselines/external/sDbscan/build
 baselines/external/sDbscan/cmake-build-debug
 baselines/external/sDbscan/cmake-build-release
+
+temp/

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import fields, replace
 import json
 from pathlib import Path
 from typing import Any
@@ -12,10 +13,13 @@ import torch
 import torch.nn.functional as F
 
 from frozen_representation.cache import FrozenEmbeddingCache
+from topocalib_uc.batching import collate_parts, part_batches, positive_part_count, validate_part_count
 from topocalib_uc.calibration.margin import (
     apply_pairwise_logit_update,
     compute_margin_calibration,
 )
+from topocalib_uc.calibration.controls import apply_control, frequency_adjustment
+from topocalib_uc.inference.perturbation import delete_adjacencies
 from topocalib_uc.candidate_pair.pairs import inference_candidate_pairs
 from topocalib_uc.evidence.readout import FaceBatchMeta
 from topocalib_uc.inference.records import build_face_prediction_records, write_face_prediction_records
@@ -31,6 +35,11 @@ from topocalib_uc.train.variants import VariantConfig
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--frequency-eta", type=float, default=None)
+    parser.add_argument("--labeled-parts-manifest", type=Path, default=None, help="Recover training counts for older B0 checkpoints.")
+    parser.add_argument("--adjacency-deletion", type=float, default=0.0)
+    parser.add_argument("--perturbation-seed", type=int, default=0)
+    parser.add_argument("--batch-part-count", "--batch-size", type=positive_part_count, default=16)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, required=True)
     parser.add_argument("--ssrl-cache-dir", type=Path, default=None)
@@ -61,6 +70,7 @@ def main() -> int:
 @torch.no_grad()
 def run(args: argparse.Namespace) -> dict[str, Any]:
     _ensure_defaults(args)
+    validate_part_count(args.batch_part_count)
     device = torch.device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
     method = str(checkpoint.get("method", ""))
@@ -68,10 +78,39 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     class_index = ClassIndex([int(x) for x in checkpoint["classes"]])
     records = _select_records(cache, args.part_id, args.split_manifest, args.split_group)
     z_by_part = _load_embeddings(cache, args.ssrl_cache_dir, checkpoint)
+    if not 0 <= args.adjacency_deletion <= 1:
+        raise ValueError("--adjacency-deletion must be in [0, 1]")
+    if args.adjacency_deletion > 0:
+        if (checkpoint.get("variant", {}).get("name") != "B5"
+                or checkpoint.get("calibration", {}).get("mode", "pairwise") != "pairwise"):
+            raise ValueError("Adjacency deletion requires a full B5 pairwise checkpoint")
+        if args.frequency_eta is not None:
+            raise ValueError("Adjacency deletion cannot be combined with frequency adjustment")
+    if args.frequency_eta is not None:
+        if str(checkpoint.get("variant", {}).get("name", "")) != "B0":
+            raise ValueError("Frequency adjustment requires a selected B0 checkpoint")
+        if "labeled_class_counts" not in checkpoint:
+            ids = checkpoint.get("labeled_parts")
+            if args.labeled_parts_manifest is not None:
+                from topocalib_uc.train.splitting import load_labeled_parts_manifest
+                if args.split_manifest is None:
+                    raise ValueError("Recovering counts from a manifest requires --split-manifest")
+                ids = load_labeled_parts_manifest(args.labeled_parts_manifest, cache, load_split_manifest(args.split_manifest, cache))
+            if not ids:
+                raise ValueError("B0 checkpoint has no labeled-training membership; provide its manifest")
+            if args.split_manifest is not None:
+                train_ids = set(load_split_manifest(args.split_manifest, cache).train)
+                if not set(ids).issubset(train_ids):
+                    raise ValueError("Labeled class counts must use training parts only")
+            saved_ids = checkpoint.get("labeled_parts")
+            if saved_ids and set(ids) != set(saved_ids):
+                raise ValueError("Manifest does not match checkpoint labeled parts")
+            labels = torch.cat([class_index.encode(cache.by_part_id(pid).y) for pid in ids])
+            checkpoint["labeled_class_counts"] = torch.bincount(labels, minlength=class_index.num_classes).tolist()
     if method == "frozen_linear":
         if args.records_output is not None:
             raise ValueError("--records-output is supported only for prototype checkpoints")
-        rows = _infer_linear(checkpoint, records, z_by_part, class_index, device, save_logits=args.save_logits)
+        rows = _infer_linear(checkpoint, records, z_by_part, class_index, device, save_logits=args.save_logits, batch_part_count=args.batch_part_count)
         face_records: list[dict[str, Any]] = []
     elif method in {"frozen_proto", "topocalib_uc"}:
         rows, face_records = _infer_proto(
@@ -82,6 +121,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             device,
             save_logits=args.save_logits,
             collect_records=args.records_output is not None,
+            adjacency_deletion=args.adjacency_deletion, perturbation_seed=args.perturbation_seed,
+            frequency_eta=args.frequency_eta, batch_part_count=args.batch_part_count,
         )
     else:
         raise ValueError(f"Unsupported checkpoint method {method!r}")
@@ -91,11 +132,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         num_face_records = write_face_prediction_records(args.records_output, face_records)
     return {
         "method": method,
+        "variant": checkpoint.get("variant", {}).get("name"),
+        "calibration_mode": checkpoint.get("calibration", {}).get("mode", "pairwise"),
+        "training_candidates": checkpoint.get("config", {}).get("training_candidates", "gt_aware"),
         "checkpoint": str(args.checkpoint),
         "cache_dir": str(args.cache_dir),
         "ssrl_cache_dir": str(args.ssrl_cache_dir) if args.ssrl_cache_dir is not None else None,
         "classes": class_index.classes,
         "num_parts": len(rows),
+        "batch_part_count": args.batch_part_count,
+        "split_group": args.split_group,
+        "split_manifest": str(args.split_manifest) if args.split_manifest else None,
+        "dataset": sorted({record.dataset for record in records}),
+        "budget": str(checkpoint.get("config", {}).get("labeled_part_budget", "")),
+        "seed": int(checkpoint.get("config", {}).get("seed", 0)),
+        "adjacency_deletion": args.adjacency_deletion,
+        "perturbation_seed": args.perturbation_seed,
+        "frequency_eta": args.frequency_eta,
         "records_output": str(args.records_output) if args.records_output is not None else None,
         "num_face_records": num_face_records,
         "metrics": metrics,
@@ -149,6 +202,7 @@ def _infer_linear(
     device: torch.device,
     *,
     save_logits: bool,
+    batch_part_count: int = 16,
 ) -> list[dict[str, Any]]:
     model = FrozenLinearModel(
         int(checkpoint["embedding_dim"]),
@@ -159,11 +213,11 @@ def _infer_linear(
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     rows = []
-    for record in records:
-        z = z_by_part[record.part_id].to(device)
-        surface_type = record.surface_type.to(device)
-        logits = model(z, surface_type)
-        rows.append(_part_result(record, logits, class_index, save_logits=save_logits))
+    for batch_records in part_batches(records, batch_part_count):
+        batch = collate_parts(batch_records, z_by_part, device)
+        logits = model(batch["z"], batch["surface_type"])
+        for record, selection in zip(batch_records, batch["slices"]):
+            rows.append(_part_result(record, logits[selection], class_index, save_logits=save_logits))
     return rows
 
 
@@ -176,6 +230,10 @@ def _infer_proto(
     *,
     save_logits: bool,
     collect_records: bool,
+    adjacency_deletion: float = 0.0,
+    perturbation_seed: int = 0,
+    frequency_eta: float | None = None,
+    batch_part_count: int = 16,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     model = SurfaceTokenAdapter(
         int(checkpoint["embedding_dim"]),
@@ -193,22 +251,21 @@ def _infer_proto(
     config = checkpoint.get("config", {})
     budget = str(config.get("labeled_part_budget", ""))
     seed = int(config.get("seed", 0))
-    for record in records:
-        z = z_by_part[record.part_id].to(device)
-        surface_type = record.surface_type.to(device)
-        tokens = model(z, surface_type)
+    for batch_records in part_batches(records, batch_part_count):
+        evidence_records = []
+        for record in batch_records:
+            meta = delete_adjacencies(_meta_for_record(record, device), adjacency_deletion, perturbation_seed, record.part_id)
+            evidence_records.append(replace(record, edges=meta.edges, edge_type=meta.edge_type))
+        batch = collate_parts(evidence_records, z_by_part, device)
+        tokens = model(batch["z"], batch["surface_type"])
         base_logits = prototype_logits(tokens, prototypes, tau)
         base_probs = F.softmax(base_logits, dim=1)
         pair_a, pair_b, margin = inference_candidate_pairs(base_probs)
         diagnostics = None
         logits = base_logits
+        evidence_meta = batch["meta"]
         if variant.use_inference_calibration:
-            diagnostics = compute_margin_calibration(
-                base_probs,
-                pair_a,
-                pair_b,
-                margin,
-                _meta_for_record(record, device),
+            options = dict(
                 use_local_evidence=variant.use_local_evidence,
                 use_ambiguity_gate=variant.use_ambiguity_gate,
                 use_part_prior=variant.use_part_prior,
@@ -217,25 +274,33 @@ def _infer_proto(
                 lambda_part=float(calibration.get("lambda_part", 0.5)),
                 top_k=int(calibration.get("part_top_k", 5)),
             )
-            logits = apply_pairwise_logit_update(base_logits, pair_a, pair_b, diagnostics.delta)
-        rows.append(_part_result(record, logits, class_index, save_logits=save_logits))
-        if collect_records:
-            face_records.extend(
-                build_face_prediction_records(
-                    record,
-                    class_index,
-                    base_logits,
-                    logits,
-                    pair_a,
-                    pair_b,
-                    margin,
-                    diagnostics,
-                    method=str(checkpoint.get("method", "")),
-                    variant=variant.name,
-                    budget=budget,
-                    seed=seed,
-                )
-            )
+            if calibration.get("mode", "pairwise") == "pairwise":
+                diagnostics = compute_margin_calibration(
+                    base_probs, pair_a, pair_b, margin, evidence_meta, **options)
+                logits = apply_pairwise_logit_update(base_logits, pair_a, pair_b, diagnostics.delta)
+            else:
+                if collect_records:
+                    raise ValueError("Pairwise diagnostic records are unavailable for structural controls; use --save-logits")
+                logits = apply_control(
+                    base_logits, base_probs, pair_a, pair_b, margin, evidence_meta,
+                    mode=calibration["mode"],
+                    smoothing_alpha=float(calibration.get("smoothing_alpha", 0.5)),
+                    lambda_all=float(calibration.get("lambda_all", 1.0)), **options)
+        if frequency_eta is not None:
+            if collect_records:
+                raise ValueError("Pairwise diagnostic records are unavailable for frequency adjustment; use --save-logits")
+            logits = frequency_adjustment(logits, checkpoint["labeled_class_counts"], frequency_eta)
+        for record, evidence_record, selection in zip(batch_records, evidence_records, batch["slices"]):
+            part_result = _part_result(record, logits[selection], class_index, save_logits=save_logits)
+            part_result["base_pred"] = [class_index.classes[int(i)] for i in base_logits[selection].argmax(1).cpu().tolist()]
+            rows.append(part_result)
+            if collect_records:
+                part_diagnostics = None if diagnostics is None else replace(
+                    diagnostics, **{field.name: getattr(diagnostics, field.name)[selection] for field in fields(diagnostics)})
+                face_records.extend(build_face_prediction_records(
+                    evidence_record, class_index, base_logits[selection], logits[selection],
+                    pair_a[selection], pair_b[selection], margin[selection], part_diagnostics,
+                    method=str(checkpoint.get("method", "")), variant=variant.name, budget=budget, seed=seed))
     return rows, face_records
 
 
@@ -305,6 +370,11 @@ def _json_safe(value: Any) -> Any:
 
 def _ensure_defaults(args: argparse.Namespace) -> None:
     for name, default in [
+        ("batch_part_count", 16),
+        ("frequency_eta", None),
+        ("labeled_parts_manifest", None),
+        ("adjacency_deletion", 0.0),
+        ("perturbation_seed", 0),
         ("part_id", None),
         ("split_manifest", None),
         ("split_group", "test"),

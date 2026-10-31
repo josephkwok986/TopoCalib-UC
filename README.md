@@ -2,7 +2,7 @@
 
 TopoCalib-UC is a lightweight downstream learning method for low-label CAD B-Rep face-level segmentation. The method builds a token adapter and class prototypes on top of a frozen SSRL B-Rep face encoder. For the currently most confusing candidate class pair, it introduces shared-boundary local evidence and same-part prototype evidence to perform ambiguity-aware calibration on the prototype decision margin. Training and inference share the same candidate-pair calibration rule.
 
-The experiments cover Fusion360 Gallery Segmentation and MFCAD++. This repository only contains code, adaptation layers, and experiment entry points; raw data, preprocessed outputs, checkpoints, logs, and result files should all be stored in external directories outside the repository. The fixed-protocol analysis and benchmark commands are documented in [EXPERIMENTS.md](EXPERIMENTS.md).
+The experiments cover Fusion360 Gallery Segmentation and MFCAD++. This repository only contains code, adaptation layers, and experiment entry points; raw data, preprocessed outputs, checkpoints, logs, and result files should all be stored in external directories outside the repository. The fixed-protocol analyses, targeted structural controls, training-candidate comparison, adjacency-deletion experiments, and benchmark commands are documented in [EXPERIMENTS.md](EXPERIMENTS.md). Experiment configurations are provided in `experiment_protocols/configs/`.
 
 ## Data Download Links
 
@@ -23,13 +23,13 @@ The repository provides three Dockerfiles, respectively for CAD/B-Rep preprocess
 
 `Dockerfile.cad_preprocess` is used for OpenCascade/pythonocc-related STEP reading, B-Rep geometry parsing, PartGraph construction, cache checking, and auxiliary chart processing.
 
-This command builds the CAD/B-Rep preprocessing image.
+Build the CAD/B-Rep preprocessing image.
 
 ```bash
 docker build -t topocalib_cad_preprocess:1.0 -f Dockerfile.cad_preprocess .
 ```
 
-This command enters the CAD/B-Rep preprocessing container.
+Enter the CAD/B-Rep preprocessing container.
 
 ```bash
 docker run -it --rm \
@@ -45,13 +45,13 @@ docker run -it --rm \
 
 `Dockerfile.topocalib_train` is used for PartGraph loading, TopoCalib-UC, Frozen + Linear, Frozen + Proto, SSRL + MR-GCN, result organization, and external baseline adaptation layers.
 
-This command builds the TopoCalib-UC downstream training image.
+Build the TopoCalib-UC downstream training image.
 
 ```bash
 docker build -t topocalib_train:1.0 -f Dockerfile.topocalib_train .
 ```
 
-This command enters the TopoCalib-UC downstream training container.
+Enter the TopoCalib-UC downstream training container.
 
 ```bash
 docker run -it --rm --gpus all \
@@ -67,13 +67,13 @@ docker run -it --rm --gpus all \
 
 `Dockerfile.hybridbrep_cad1.1` is used for HybridBrep preprocessing, SSRL encoder training, and SSRL face representation export. This environment is maintained separately from the downstream training environment.
 
-This command builds the HybridBrep/SSRL training image.
+Build the HybridBrep/SSRL training image.
 
 ```bash
 docker build -t topocalib_hybridbrep:1.1 -f Dockerfile.hybridbrep_cad1.1 .
 ```
 
-This command enters the HybridBrep/SSRL training container.
+Enter the HybridBrep/SSRL training container.
 
 ```bash
 docker run -it --rm --gpus all \
@@ -87,7 +87,7 @@ docker run -it --rm --gpus all \
 
 After entering `topocalib_hybridbrep`, run the following first if the HybridBrep C++ extension has not yet been built:
 
-This command compiles the HybridBrep C++ extension inside the container.
+Compile the HybridBrep C++ extension inside the container.
 
 ```bash
 build_hybridbrep_cpp
@@ -127,7 +127,7 @@ This workflow includes CAD parsing, SSRL training, downstream training for multi
 
 Input: raw Fusion360 Gallery `breps/step` and `breps/seg`. Output: filtered PartGraph `.pt` files, manifest, and summary.
 
-This command reads the STEP and face label files from Fusion360 Gallery and generates the Fusion360 filtered PartGraph cache.
+Read the STEP and face label files from Fusion360 Gallery and generate the Fusion360 filtered PartGraph cache.
 
 ```bash
 python data_protocol/scripts/build_fusion360_cache.py \
@@ -137,7 +137,7 @@ python data_protocol/scripts/build_fusion360_cache.py \
   --error-log /out/topocalib_uc/fusion360_filtered/error.jsonl
 ```
 
-This command summarizes the parts, faces, edges, and label distribution in the Fusion360 PartGraph cache.
+Summarize the parts, faces, edges, and label distribution in the Fusion360 PartGraph cache.
 
 ```bash
 python data_protocol/scripts/summarize_pt_cache.py \
@@ -149,7 +149,7 @@ python data_protocol/scripts/summarize_pt_cache.py \
 
 Input: MFCAD++ `hierarchical_graphs` and `step`. Output: filtered PartGraph `.pt` files, manifest, and summary.
 
-This command reads the hierarchical graph and STEP files from MFCAD++ and generates the MFCAD++ filtered PartGraph cache.
+Read the hierarchical graph and STEP files from MFCAD++ and generate the MFCAD++ filtered PartGraph cache.
 
 ```bash
 python data_protocol/scripts/build_mfcadpp_cache.py \
@@ -159,7 +159,7 @@ python data_protocol/scripts/build_mfcadpp_cache.py \
   --error-log /out/topocalib_uc/mfcadpp_filtered/error.jsonl
 ```
 
-This command summarizes the parts, faces, edges, and label distribution in the MFCAD++ PartGraph cache.
+Summarize the parts, faces, edges, and label distribution in the MFCAD++ PartGraph cache.
 
 ```bash
 python data_protocol/scripts/summarize_pt_cache.py \
@@ -171,7 +171,7 @@ python data_protocol/scripts/summarize_pt_cache.py \
 
 Run the following commands in the `Dockerfile.hybridbrep_cad1.1` environment. Input: STEP paths recorded in the PartGraph cache. Output: HybridBrep graph `.pt` files and manifest.
 
-This command converts the STEP files recorded in the Fusion360 PartGraph cache into a HybridBrep graph cache.
+Convert the STEP files recorded in the Fusion360 PartGraph cache into a HybridBrep graph cache.
 
 ```bash
 python frozen_representation/scripts/build_hybridbrep_cache.py \
@@ -182,7 +182,7 @@ python frozen_representation/scripts/build_hybridbrep_cache.py \
   --sort-frac 0.5
 ```
 
-This command converts the STEP files recorded in the MFCAD++ PartGraph cache into a HybridBrep graph cache.
+Convert the STEP files recorded in the MFCAD++ PartGraph cache into a HybridBrep graph cache.
 
 ```bash
 python frozen_representation/scripts/build_hybridbrep_cache.py \
@@ -197,7 +197,7 @@ python frozen_representation/scripts/build_hybridbrep_cache.py \
 
 Input: HybridBrep graph cache. Output: SSRL encoder checkpoint. During training, losses and process logs are continuously printed to stdout.
 
-This command trains the SSRL encoder on the Fusion360 HybridBrep graph cache.
+Train the SSRL encoder on the Fusion360 HybridBrep graph cache.
 
 ```bash
 python frozen_representation/scripts/train_ssrl.py \
@@ -214,7 +214,7 @@ python frozen_representation/scripts/train_ssrl.py \
   --device cuda
 ```
 
-This command trains the SSRL encoder on the MFCAD++ HybridBrep graph cache.
+Train the SSRL encoder on the MFCAD++ HybridBrep graph cache.
 
 ```bash
 python frozen_representation/scripts/train_ssrl.py \
@@ -235,7 +235,7 @@ python frozen_representation/scripts/train_ssrl.py \
 
 Input: HybridBrep graph cache and SSRL checkpoint. Output: face representation `.pt` files for each part and a manifest.
 
-This command loads the Fusion360 SSRL checkpoint and exports the Fusion360 face-level representation cache.
+Load the Fusion360 SSRL checkpoint and export the Fusion360 face-level representation cache.
 
 ```bash
 python frozen_representation/scripts/export_ssrl_embeddings.py \
@@ -249,7 +249,7 @@ python frozen_representation/scripts/export_ssrl_embeddings.py \
   --device cuda
 ```
 
-This command loads the MFCAD++ SSRL checkpoint and exports the MFCAD++ face-level representation cache.
+Load the MFCAD++ SSRL checkpoint and export the MFCAD++ face-level representation cache.
 
 ```bash
 python frozen_representation/scripts/export_ssrl_embeddings.py \
@@ -269,7 +269,7 @@ Input: Fusion360 PartGraph and SSRL face representation. Output: one JSON result
 
 Frozen + Linear:
 
-This command runs the Frozen + Linear baseline on Fusion360.
+Run the Frozen + Linear baseline on Fusion360.
 
 ```bash
 python -m topocalib_uc.train.run_frozen_linear \
@@ -294,7 +294,7 @@ python -m topocalib_uc.train.run_frozen_linear \
 
 Frozen + Proto:
 
-This command runs the Frozen + Proto baseline on Fusion360.
+Run the Frozen + Proto baseline on Fusion360.
 
 ```bash
 python -m topocalib_uc.train.run_frozen_proto \
@@ -325,7 +325,7 @@ python -m topocalib_uc.train.run_frozen_proto \
 
 TopoCalib-UC:
 
-This command runs the full TopoCalib-UC model on Fusion360.
+Run the full TopoCalib-UC model on Fusion360.
 
 ```bash
 python -m topocalib_uc.train.run_frozen_proto \
@@ -361,7 +361,7 @@ Checkpoint and inference:
 
 The training entry point saves the downstream checkpoint. If `--checkpoint-output` is not explicitly provided, it is saved by default to the path with the same name as `--output` and the `.pt` suffix. The TopoCalib-UC / Frozen + Proto checkpoint contains adapter weights, class prototypes, the class list, the variant, and calibration hyperparameters; the Frozen + Linear checkpoint contains the adapter and linear head weights.
 
-This command loads the Fusion360 TopoCalib-UC checkpoint and runs inference on all parts in the Fusion360 PartGraph cache. The output JSON contains the predicted labels for each part; if the cache contains GT labels, it also reports overall and per-part accuracy / mIoU.
+Load the Fusion360 TopoCalib-UC checkpoint and run inference on all parts in the Fusion360 PartGraph cache. The output JSON contains the predicted labels for each part; if the cache contains GT labels, it also reports overall and per-part accuracy / mIoU.
 
 ```bash
 python -m topocalib_uc.inference.run \
@@ -372,7 +372,7 @@ python -m topocalib_uc.inference.run \
   --device cuda
 ```
 
-This command runs inference only on specified parts. `--part-id` can be passed repeatedly; add `--save-logits` to save logits for each face.
+Run inference only on specified parts. `--part-id` can be passed repeatedly; add `--save-logits` to save logits for each face.
 
 ```bash
 python -m topocalib_uc.inference.run \
@@ -389,7 +389,7 @@ python -m topocalib_uc.inference.run \
 
 Input: MFCAD++ PartGraph and SSRL face representation. Output: one JSON result file per command.
 
-This command runs the full TopoCalib-UC model on MFCAD++.
+Run the full TopoCalib-UC model on MFCAD++.
 
 ```bash
 python -m topocalib_uc.train.run_frozen_proto \
@@ -424,7 +424,7 @@ For Frozen + Linear and Frozen + Proto, use the corresponding commands from the 
 
 Input: PartGraph and SSRL face representation. Output: a JSON result file and a `.pt` checkpoint with the same base name.
 
-This command runs the SSRL + MR-GCN baseline on Fusion360.
+Run the SSRL + MR-GCN baseline on Fusion360.
 
 ```bash
 python -m baselines.ssrl_mrgcn.run \
@@ -456,7 +456,7 @@ For MFCAD++, use the same command structure, replace the input and output paths 
 
 Input: PartGraph and SSRL face representation. Output: one JSON file for each variant, budget, and seed.
 
-This command runs the B0 ablation configuration on Fusion360.
+Run the B0 ablation configuration on Fusion360.
 
 ```bash
 python -m topocalib_uc.train.run_frozen_proto \
@@ -493,7 +493,7 @@ The upstream code for external baselines is located in `baselines/external/*/ups
 
 BRepNet on Fusion360:
 
-This command converts the Fusion360 PartGraph cache into the STEP, seg, and split files required by BRepNet.
+Convert the Fusion360 PartGraph cache into the STEP, seg, and split files required by BRepNet.
 
 ```bash
 python -m baselines.external.brepnet.adapters.prepare_brepnet_data \
@@ -502,7 +502,7 @@ python -m baselines.external.brepnet.adapters.prepare_brepnet_data \
   --dataset fusion360_gallery
 ```
 
-This command enters the BRepNet upstream directory and extracts BRepNet training features from STEP files.
+Enter the BRepNet upstream directory and extract BRepNet training features from STEP files.
 
 ```bash
 cd baselines/external/brepnet/upstream/BRepNet
@@ -514,7 +514,7 @@ python -m pipeline.extract_brepnet_data_from_step \
   --num_workers 8
 ```
 
-This command builds the BRepNet dataset file from the BRepNet processed feature directory and the train/test split.
+Build the BRepNet dataset file from the BRepNet processed feature directory and the train/test split.
 
 ```bash
 python -m pipeline.build_dataset_file \
@@ -524,7 +524,7 @@ python -m pipeline.build_dataset_file \
   --dataset_file /out/topocalib_uc/external_baselines/brepnet/converted_data/fusion360_gallery/brepnet_dataset.json
 ```
 
-This command trains BRepNet on the converted Fusion360 data.
+Train BRepNet on the converted Fusion360 data.
 
 ```bash
 python -m train.train \
@@ -542,7 +542,7 @@ python -m train.train \
 
 UV-Net on Fusion360:
 
-This command prepares the STEP links, face labels, split files, and graph output directory required by UV-Net.
+Prepare the STEP links, face labels, split files, and graph output directory required by UV-Net.
 
 ```bash
 cd /workspace/TopoCalib-UC
@@ -552,7 +552,7 @@ python -m baselines.external.uvnet.adapters.prepare_uvnet_data \
   --dataset fusion360_gallery
 ```
 
-This command converts STEP files into UV-Net graph data.
+Convert STEP files into UV-Net graph data.
 
 ```bash
 cd baselines/external/uvnet/upstream/UV-Net
@@ -562,7 +562,7 @@ python -m process.solid_to_graph \
   --num_processes 8
 ```
 
-This command trains the UV-Net segmentation model on the converted Fusion360 data.
+Train the UV-Net segmentation model on the converted Fusion360 data.
 
 ```bash
 python segmentation.py train \
@@ -576,7 +576,7 @@ python segmentation.py train \
 
 AAGNet on MFCAD++:
 
-This command prepares the STEP links, face labels, split files, and AAG output directory required by AAGNet.
+Prepare the STEP links, face labels, split files, and AAG output directory required by AAGNet.
 
 ```bash
 cd /workspace/TopoCalib-UC
@@ -586,7 +586,7 @@ python -m baselines.external.aagnet.adapters.prepare_aagnet_data \
   --dataset mfcadpp
 ```
 
-This command extracts AAG representations from STEP files.
+Extract AAG representations from STEP files.
 
 ```bash
 cd baselines/external/aagnet/upstream/AAGNet
@@ -596,7 +596,7 @@ python dataset/AAGExtractor.py \
   --num_workers 8
 ```
 
-This command trains AAGNet on the converted MFCAD++ data.
+Train AAGNet on the converted MFCAD++ data.
 
 ```bash
 cd /workspace/TopoCalib-UC

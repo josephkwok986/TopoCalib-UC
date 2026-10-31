@@ -1,0 +1,15 @@
+{
+  "budgets": [
+    1000
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "kind": "train",
+  "arguments": [
+    "--training-candidates",
+    "predicted_top2"
+  ]
+}

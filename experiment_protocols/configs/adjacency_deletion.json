@@ -1,0 +1,22 @@
+{
+  "budgets": [
+    1000
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "kind": "topology",
+  "deletion_probabilities": [
+    0,
+    0.1,
+    0.3,
+    0.5
+  ],
+  "perturbation_seeds": [
+    0,
+    1,
+    2
+  ]
+}

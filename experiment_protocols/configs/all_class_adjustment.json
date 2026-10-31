@@ -1,0 +1,20 @@
+{
+  "budgets": [
+    200,
+    1000
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "kind": "train",
+  "arguments": [
+    "--calibration-mode",
+    "all_class"
+  ],
+  "strengths": [
+    1.0
+  ],
+  "strength_argument": "--lambda-all"
+}

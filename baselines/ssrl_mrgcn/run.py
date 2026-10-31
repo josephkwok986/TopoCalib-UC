@@ -14,6 +14,7 @@ import torch.nn.functional as F
 
 from baselines.ssrl_mrgcn.model import SSRLMRGCN
 from frozen_representation.cache import FrozenEmbeddingCache
+from topocalib_uc.batching import part_batches, positive_part_count, validate_part_count
 from topocalib_uc.metrics.segmentation import accuracy, mean_iou
 from topocalib_uc.prototypes.matching import ClassIndex
 from topocalib_uc.train.partgraph_dataset import PartGraphCache, PartRecord
@@ -54,7 +55,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--patience", type=int, required=True)
     parser.add_argument("--lr", type=float, required=True)
     parser.add_argument("--weight-decay", type=float, required=True)
-    parser.add_argument("--batch-part-count", type=int, required=True)
+    parser.add_argument("--batch-part-count", "--batch-size", type=positive_part_count, default=16)
     parser.add_argument("--undirected", choices=["true", "false"], required=True)
     return parser
 
@@ -68,6 +69,9 @@ def main() -> int:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    if not hasattr(args, "batch_part_count"):
+        args.batch_part_count = 16
+    validate_part_count(args.batch_part_count)
     args.undirected = _parse_bool(args.undirected)
     if args.split_seed is None:
         args.split_seed = args.seed

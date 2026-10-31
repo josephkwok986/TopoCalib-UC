@@ -17,8 +17,9 @@ import torch
 import torch.nn.functional as F
 
 from baselines.ssrl_mrgcn.model import SSRLMRGCN
+from topocalib_uc.batching import collate_parts, positive_part_count
 from frozen_representation.cache import FrozenEmbeddingCache
-from topocalib_uc.calibration.margin import apply_margin_calibration
+from topocalib_uc.calibration.controls import apply_control
 from topocalib_uc.candidate_pair.pairs import inference_candidate_pairs
 from topocalib_uc.evidence.readout import FaceBatchMeta
 from topocalib_uc.prototypes.matching import prototype_logits
@@ -58,7 +59,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--device", default="cuda")
-    run.add_argument("--batch-size", type=int, default=16)
+    run.add_argument("--batch-size", "--batch-part-count", type=positive_part_count, default=16)
     run.add_argument("--warmup-repetitions", type=int, default=1)
     run.add_argument("--repetitions", type=int, default=5)
     run.add_argument("--std-ddof", type=int, choices=[0, 1], default=1)
@@ -345,7 +346,7 @@ def build_proto_runner(
             if variant.use_inference_calibration:
                 probs = F.softmax(logits, dim=1)
                 pair_a, pair_b, margin = inference_candidate_pairs(probs)
-                logits = apply_margin_calibration(
+                logits = apply_control(
                     logits,
                     probs,
                     pair_a,
@@ -359,6 +360,9 @@ def build_proto_runner(
                     lambda_cal=float(calibration.get("lambda_cal", 1.0)),
                     lambda_part=float(calibration.get("lambda_part", 0.5)),
                     top_k=int(calibration.get("part_top_k", 5)),
+                    mode=calibration.get("mode", "pairwise"),
+                    smoothing_alpha=float(calibration.get("smoothing_alpha", 0.5)),
+                    lambda_all=float(calibration.get("lambda_all", 1.0)),
                 )
             _ = logits.argmax(dim=1)
 
@@ -408,23 +412,8 @@ def collate_proto(
     z_by_part: dict[str, torch.Tensor],
     device: torch.device,
 ) -> dict[str, Any]:
-    edge_chunks = []
-    edge_type_chunks = []
-    part_index = []
-    offset = 0
-    for part_index_value, record in enumerate(records):
-        part_index.append(torch.full((record.num_faces,), part_index_value, dtype=torch.long, device=device))
-        if record.edges.numel():
-            edge_chunks.append(record.edges.to(device) + offset)
-            edge_type_chunks.append(record.edge_type.to(device))
-        offset += record.num_faces
-    edges = torch.cat(edge_chunks) if edge_chunks else torch.zeros((0, 2), dtype=torch.long, device=device)
-    edge_type = torch.cat(edge_type_chunks) if edge_type_chunks else torch.zeros((0,), dtype=torch.long, device=device)
-    return {
-        "z": torch.cat([z_by_part[record.part_id] for record in records]),
-        "surface_type": torch.cat([record.surface_type.to(device) for record in records]),
-        "meta": FaceBatchMeta(part_index=torch.cat(part_index), edges=edges, edge_type=edge_type),
-    }
+    batch = collate_parts(records, z_by_part, device)
+    return {"z": batch["z"], "surface_type": batch["surface_type"], "meta": batch["meta"]}
 
 
 def collate_mrgcn(

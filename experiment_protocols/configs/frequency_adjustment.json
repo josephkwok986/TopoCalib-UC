@@ -1,0 +1,15 @@
+{
+  "budgets": [
+    200,
+    1000
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "kind": "frequency",
+  "strengths": [
+    0.5
+  ]
+}

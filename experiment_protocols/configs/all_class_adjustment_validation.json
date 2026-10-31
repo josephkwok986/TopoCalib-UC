@@ -1,0 +1,23 @@
+{
+  "budgets": [
+    1000
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "kind": "train",
+  "arguments": [
+    "--calibration-mode",
+    "all_class"
+  ],
+  "strengths": [
+    0,
+    0.5,
+    1,
+    2
+  ],
+  "strength_argument": "--lambda-all",
+  "validation_only": true
+}

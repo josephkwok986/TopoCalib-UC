@@ -5,3 +5,5 @@ Generated split, labeled-part, subset, and workload manifests may be stored unde
 All manifests use dataset-relative part IDs. Face records use `(dataset, part_id, face_id)` with a zero-based, part-local face index. Loaders validate dataset identity, class mapping, duplicate IDs, split membership, and the relevant face-count or budget constraints before use.
 
 `sdbscan_table_b6.json` records the Table B6 validation grid, fixed approximation parameters, dataset-specific selected values, and execution seed rule.
+
+`configs/` contains the structural-control, candidate-selection, frequency-adjustment, and adjacency-deletion settings. Validation-grid configurations are separate from final evaluation configurations. Run them with `python -m scripts.run_targeted_experiments`; see `EXPERIMENTS.md` for the selection and reporting workflow.

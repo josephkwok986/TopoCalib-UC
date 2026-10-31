@@ -13,6 +13,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from frozen_representation.cache import FrozenEmbeddingCache
+from topocalib_uc.batching import part_batches, positive_part_count, validate_part_count
 from topocalib_uc.metrics.segmentation import accuracy, mean_iou
 from topocalib_uc.prototypes.matching import ClassIndex
 from topocalib_uc.tokenization.adapter import SurfaceTokenAdapter
@@ -47,6 +48,7 @@ class FrozenLinearModel(nn.Module):
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a frozen linear baseline on PartGraph cache.")
+    parser.add_argument("--batch-part-count", "--batch-size", type=positive_part_count, default=16)
     parser.add_argument("--cache-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split-source", choices=["random_filtered", "dataset"], default="random_filtered")
@@ -89,6 +91,7 @@ def main() -> int:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     _ensure_defaults(args)
+    validate_part_count(args.batch_part_count)
     _log(f"start frozen_linear cache={args.cache_dir} embeddings={args.ssrl_cache_dir} output={args.output}")
     torch.manual_seed(args.seed)
     cache = PartGraphCache(args.cache_dir)
@@ -124,7 +127,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     model = FrozenLinearModel(embedding_dim, args.hidden_dim, args.num_surface_types, class_index.num_classes)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    labeled_batch = _collect_faces(cache, z_by_part, labeled_parts, class_index)
 
     best_state: dict[str, torch.Tensor] | None = None
     best_monitor = -1.0
@@ -136,16 +138,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     for epoch in range(args.epochs):
         model.train()
-        optimizer.zero_grad()
-        logits = model(labeled_batch["z"], labeled_batch["surface_type"])
-        loss = F.cross_entropy(logits, labeled_batch["encoded_y"])
-        loss.backward()
-        optimizer.step()
+        loss_sum, face_count, update_count = 0.0, 0, 0
+        for ids in part_batches(labeled_parts, args.batch_part_count, shuffle_seed=args.seed + epoch):
+            batch = _collect_faces(cache, z_by_part, ids, class_index)
+            optimizer.zero_grad()
+            logits = model(batch["z"], batch["surface_type"])
+            loss = F.cross_entropy(logits, batch["encoded_y"])
+            loss.backward()
+            optimizer.step()
+            loss_sum += float(loss.item()) * len(batch["y"])
+            face_count += len(batch["y"])
+            update_count += 1
+        epoch_loss = loss_sum / max(face_count, 1)
 
-        train_eval = _evaluate(cache, z_by_part, model, labeled_parts, class_index)
-        val_eval = _evaluate(cache, z_by_part, model, split.val, class_index)
-        history.append({"epoch": float(epoch), "loss": float(loss.item()), "val_miou": val_eval["miou"]})
-        _log(f"epoch={epoch} loss={loss.item():.6f} train_miou={train_eval['miou']:.6f} val_miou={val_eval['miou']:.6f}")
+        train_eval = _evaluate(cache, z_by_part, model, labeled_parts, class_index, args.batch_part_count)
+        val_eval = _evaluate(cache, z_by_part, model, split.val, class_index, args.batch_part_count)
+        history.append({"epoch": float(epoch), "loss": epoch_loss, "optimizer_steps": update_count, "val_miou": val_eval["miou"]})
+        _log(f"epoch={epoch} loss={epoch_loss:.6f} train_miou={train_eval['miou']:.6f} val_miou={val_eval['miou']:.6f}")
         has_val = bool(split.val)
         monitor = val_eval["miou"] if has_val else train_eval["miou"]
         if monitor >= best_monitor:
@@ -165,9 +174,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     checkpoint_path = _write_checkpoint(args, model, embedding_dim, class_index.classes, embedding_normalizer)
     metrics = {
-        "train_labeled": _evaluate(cache, z_by_part, model, labeled_parts, class_index),
-        "val": _evaluate(cache, z_by_part, model, split.val, class_index),
-        "test": _evaluate(cache, z_by_part, model, split.test, class_index),
+        "train_labeled": _evaluate(cache, z_by_part, model, labeled_parts, class_index, args.batch_part_count),
+        "val": _evaluate(cache, z_by_part, model, split.val, class_index, args.batch_part_count),
+        "test": _evaluate(cache, z_by_part, model, split.test, class_index, args.batch_part_count),
     }
     _log(f"done test_miou={metrics['test']['miou']:.6f} test_accuracy={metrics['test']['accuracy']:.6f}")
     return {
@@ -252,18 +261,22 @@ def _evaluate(
     model: FrozenLinearModel,
     eval_part_ids: list[str],
     class_index: ClassIndex,
+    batch_part_count: int = 16,
 ) -> dict[str, float]:
     if not eval_part_ids:
         return {"accuracy": 0.0, "miou": 0.0, "num_faces": 0.0}
     model.eval()
-    batch = _collect_faces(cache, z_by_part, eval_part_ids, class_index)
-    logits = model(batch["z"], batch["surface_type"])
-    pred_encoded = logits.argmax(dim=1)
-    pred = torch.as_tensor([class_index.classes[int(idx)] for idx in pred_encoded.tolist()], dtype=torch.long)
+    predictions, targets = [], []
+    for ids in part_batches(eval_part_ids, batch_part_count):
+        batch = _collect_faces(cache, z_by_part, ids, class_index)
+        logits = model(batch["z"], batch["surface_type"])
+        predictions.append(torch.as_tensor([class_index.classes[int(i)] for i in logits.argmax(1).tolist()]))
+        targets.append(batch["y"])
+    pred, target = torch.cat(predictions), torch.cat(targets)
     return {
-        "accuracy": accuracy(pred, batch["y"]),
-        "miou": mean_iou(pred, batch["y"], class_index.classes),
-        "num_faces": float(batch["y"].numel()),
+        "accuracy": accuracy(pred, target),
+        "miou": mean_iou(pred, target, class_index.classes),
+        "num_faces": float(target.numel()),
     }
 
 
@@ -322,6 +335,7 @@ def _single_embedding_dim(z_by_part: dict[str, torch.Tensor]) -> int:
 
 def _ensure_defaults(args: argparse.Namespace) -> None:
     for name, default in [
+        ("batch_part_count", 16),
         ("split_source", "random_filtered"),
         ("train_ratio", 0.7),
         ("val_ratio", 0.15),
